@@ -2,37 +2,33 @@ const express = require('express');
 const multer = require('multer');
 const router = express.Router();
 const Product = require('../models/Product');
-const path = require('path');
+const cloudinary = require('cloudinary').v2;
 const fs = require('fs');
 
-// Caminho para o diretório de uploads
-const uploadDir = path.join(__dirname, '../uploads');
-
-// Garantir que o diretório de uploads existe
-if (!fs.existsSync(uploadDir)) {
-    fs.mkdirSync(uploadDir, { recursive: true });
-}
-
-// Configuração do multer para armazenamento de arquivos
-const storage = multer.diskStorage({
-    destination: function (req, file, cb) {
-        cb(null, uploadDir);
-    },
-    filename: function (req, file, cb) {
-        cb(null, Date.now() + '-' + file.originalname);
-    }
-});
-
-const upload = multer({ storage: storage });
+// Configuração do multer para armazenamento de arquivos em memória temporária
+const storage = multer.memoryStorage();
+const upload = multer({ storage });
 
 // CREATE - Criar um novo produto
 router.post('/products', upload.array('images', 5), async (req, res) => {
     try {
-        console.log(req.body); // Verifique se condition está presente
         const productData = req.body;
-        if (req.files) {
-            productData.images = req.files.map(file => `/uploads/${file.filename}`); // Salvar caminhos das imagens
+        
+        if (req.files && req.files.length > 0) {
+            const uploadPromises = req.files.map(file => {
+                return new Promise((resolve, reject) => {
+                    cloudinary.uploader.upload_stream({ resource_type: 'image' }, (error, result) => {
+                        if (error) {
+                            reject(error);
+                        } else {
+                            resolve(result.secure_url);
+                        }
+                    }).end(file.buffer);
+                });
+            });
+            productData.images = await Promise.all(uploadPromises); // Salvar URLs das imagens no Cloudinary
         }
+
         const product = new Product(productData);
         await product.save();
         res.status(201).send(product);
@@ -66,8 +62,6 @@ router.get('/products/:id', async (req, res) => {
     }
 });
 
-
-
 // UPDATE - Atualizar um produto pelo ID
 router.put('/products/:id', upload.array('images', 5), async (req, res) => {
     try {
@@ -82,14 +76,25 @@ router.put('/products/:id', upload.array('images', 5), async (req, res) => {
 
         // Atualizar imagens
         if (req.files && req.files.length > 0) {
-            const newImagePaths = req.files.map(file => `/uploads/${file.filename}`);
+            const uploadPromises = req.files.map(file => {
+                return new Promise((resolve, reject) => {
+                    cloudinary.uploader.upload_stream({ resource_type: 'image' }, (error, result) => {
+                        if (error) {
+                            reject(error);
+                        } else {
+                            resolve(result.secure_url);
+                        }
+                    }).end(file.buffer);
+                });
+            });
+            const newImageUrls = await Promise.all(uploadPromises);
 
             // Combinar as novas imagens com as existentes
-            productData.images = [...existingProduct.images, ...newImagePaths];
+            productData.images = [...existingProduct.images, ...newImageUrls];
 
             // Garantir que a primeira imagem continue sendo a principal
             if (req.body.keepExistingMainImage === 'false') {
-                productData.images = [...newImagePaths, ...existingProduct.images];
+                productData.images = [...newImageUrls, ...existingProduct.images];
             }
         } else {
             // Manter as imagens antigas se nenhuma nova imagem foi enviada
@@ -106,7 +111,6 @@ router.put('/products/:id', upload.array('images', 5), async (req, res) => {
     }
 });
 
-
 // DELETE - Deletar um produto pelo ID
 router.delete('/products/:id', async (req, res) => {
     try {
@@ -116,14 +120,14 @@ router.delete('/products/:id', async (req, res) => {
             return res.status(404).send({ message: 'Produto não encontrado' });
         }
 
-        // Excluir as imagens do produto
-        if (product.image && product.image.length > 0) {
-            const deletePromises = product.image.map(async (imagePath) => {
-                const fullImagePath = path.join(__dirname, '../uploads', imagePath);
+        // Excluir as imagens do produto no Cloudinary
+        if (product.images && product.images.length > 0) {
+            const deletePromises = product.images.map(async (imageUrl) => {
+                const publicId = imageUrl.split('/').pop().split('.')[0]; // Extraindo o public_id do URL da imagem
                 try {
-                    await fs.promises.unlink(fullImagePath);
+                    await cloudinary.uploader.destroy(publicId, { resource_type: 'image' });
                 } catch (err) {
-                    console.error(`Erro ao deletar a imagem: ${fullImagePath}`, err);
+                    console.error(`Erro ao deletar a imagem no Cloudinary: ${publicId}`, err);
                 }
             });
             await Promise.all(deletePromises);

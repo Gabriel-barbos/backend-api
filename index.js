@@ -5,6 +5,17 @@ const cors = require('cors');
 const path = require('path');
 const productRoutes = require('./routes/productRoutes'); 
 const adminRoutes = require('./routes/AdminRoutes');
+const cloudinary = require('cloudinary').v2;
+
+//cloudinary config
+cloudinary.config({ 
+    cloud_name: 'dcafl8a98',
+    api_key: '171669338822128', 
+    api_secret: 'gTcQsvAnR2ubk0g32LG7fNIFYfU',
+    secure:true
+});
+
+cloudinary.uploader.upload
 
 // Iniciando servidor express
 const app = express();
@@ -13,8 +24,6 @@ const PORT = process.env.PORT || 3000;
 // Configurando middlewares
 app.use(bodyParser.json());
 app.use(cors());
-
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 
 // Usar as rotas
