@@ -74,7 +74,8 @@ router.put('/products/:id', upload.array('images', 5), async (req, res) => {
             return res.status(404).send({ error: 'Product not found' });
         }
 
-        // Atualizar imagens
+        // Processar novas imagens
+        let newImageUrls = [];
         if (req.files && req.files.length > 0) {
             const uploadPromises = req.files.map(file => {
                 return new Promise((resolve, reject) => {
@@ -87,22 +88,30 @@ router.put('/products/:id', upload.array('images', 5), async (req, res) => {
                     }).end(file.buffer);
                 });
             });
-            const newImageUrls = await Promise.all(uploadPromises);
-
-            // Combinar as novas imagens com as existentes
-            productData.images = [...existingProduct.images, ...newImageUrls];
-
-            // Garantir que a primeira imagem continue sendo a principal
-            if (req.body.keepExistingMainImage === 'false') {
-                productData.images = [...newImageUrls, ...existingProduct.images];
-            }
-        } else {
-            // Manter as imagens antigas se nenhuma nova imagem foi enviada
-            productData.images = existingProduct.images;
+            newImageUrls = await Promise.all(uploadPromises);
         }
 
-        // Atualizar o produto no banco de dados
-        const updatedProduct = await Product.findByIdAndUpdate(req.params.id, productData, { new: true });
+        // Verificar se o usuário deseja manter a imagem principal existente
+        const keepExistingMainImage = req.body.keepExistingMainImage === 'true';
+
+        // Atualizar imagens
+        let updatedImages = [];
+        if (keepExistingMainImage) {
+            // Manter a primeira imagem existente e adicionar novas imagens
+            updatedImages = [existingProduct.images[0], ...newImageUrls];
+            // Adicionar as novas imagens, excluindo a primeira imagem existente para evitar duplicação
+            updatedImages = [...updatedImages, ...newImageUrls];
+        } else {
+            // Usar apenas novas imagens se não manter a imagem principal
+            updatedImages = newImageUrls;
+        }
+
+        // Atualizar o produto com novas informações
+        const updatedProduct = await Product.findByIdAndUpdate(
+            req.params.id,
+            { ...productData, images: updatedImages },
+            { new: true }
+        );
 
         res.status(200).send(updatedProduct);
     } catch (error) {
@@ -110,6 +119,7 @@ router.put('/products/:id', upload.array('images', 5), async (req, res) => {
         res.status(500).send({ error: 'Failed to update product', details: error.message });
     }
 });
+
 
 // DELETE - Deletar um produto pelo ID
 router.delete('/products/:id', async (req, res) => {
