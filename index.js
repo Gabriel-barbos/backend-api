@@ -23,8 +23,9 @@ app.use('/api', adminRoutes);
 
 // Conexão com MongoDB
 
+const mongoURI = process.env.MONGODB_URI || 'mongodb+srv://Gabriel:Gabriel1053@impermaq.ty4o9.mongodb.net/?retryWrites=true&w=majority&appName=impermaq';
 
-mongoose.connect('mongodb+srv://Gabriel:Gabriel1053@impermaq.ty4o9.mongodb.net/?retryWrites=true&w=majority&appName=impermaq', {
+mongoose.connect(mongoURI, {
     useNewUrlParser: true,
     useUnifiedTopology: true,
 });
