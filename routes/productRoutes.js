@@ -10,7 +10,7 @@ const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
 // CREATE - Criar um novo produto
-router.post('/products', upload.array('images', 5), async (req, res) => {
+router.post('/products', upload.array('images', 10), async (req, res) => {
     try {
         const productData = req.body;
         
