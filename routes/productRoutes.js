@@ -3,7 +3,6 @@ const multer = require('multer');
 const router = express.Router();
 const Product = require('../models/Product');
 const cloudinary = require('cloudinary').v2;
-const fs = require('fs');
 
 // Configuração do multer para armazenamento de arquivos em memória temporária
 const storage = multer.memoryStorage();
@@ -26,14 +25,14 @@ router.post('/products', upload.array('images', 10), async (req, res) => {
                     }).end(file.buffer);
                 });
             });
-            productData.images = await Promise.all(uploadPromises); // Salvar URLs das imagens no Cloudinary
+            productData.images = await Promise.all(uploadPromises);
         }
 
         const product = new Product(productData);
         await product.save();
         res.status(201).send(product);
     } catch (error) {
-        console.error(error); // Log de erro para debug
+        console.error('Erro ao criar produto:', error);
         res.status(500).send({ error: 'Failed to create product', details: error.message });
     }
 });
@@ -63,7 +62,7 @@ router.get('/products/:id', async (req, res) => {
 });
 
 // UPDATE - Atualizar um produto pelo ID
-router.put('/products/:id', upload.array('images', 5), async (req, res) => {
+router.put('/products/:id', upload.array('images', 10), async (req, res) => {
     try {
         const productData = req.body;
 
@@ -74,9 +73,36 @@ router.put('/products/:id', upload.array('images', 5), async (req, res) => {
             return res.status(404).send({ error: 'Product not found' });
         }
 
-        // Processar novas imagens
+        console.log('=== INÍCIO DA ATUALIZAÇÃO ===');
+        console.log('Produto existente:', existingProduct.name);
+        console.log('Imagens existentes no produto:', existingProduct.images);
+
+        // 1. PARSEAR as imagens existentes que devem ser mantidas
+        let existingImages = [];
+        if (productData.existingImages) {
+            try {
+                existingImages = JSON.parse(productData.existingImages);
+                console.log('Imagens existentes a manter (do frontend):', existingImages);
+            } catch (e) {
+                console.error('Erro ao parsear existingImages:', e);
+            }
+        }
+
+        // 2. PARSEAR as imagens que devem ser removidas
+        let imagesToRemove = [];
+        if (productData.imagesToRemove) {
+            try {
+                imagesToRemove = JSON.parse(productData.imagesToRemove);
+                console.log('Imagens a remover:', imagesToRemove);
+            } catch (e) {
+                console.error('Erro ao parsear imagesToRemove:', e);
+            }
+        }
+
+        // 3. FAZER UPLOAD das novas imagens
         let newImageUrls = [];
         if (req.files && req.files.length > 0) {
+            console.log('Fazendo upload de', req.files.length, 'novas imagens...');
             const uploadPromises = req.files.map(file => {
                 return new Promise((resolve, reject) => {
                     cloudinary.uploader.upload_stream({ resource_type: 'image' }, (error, result) => {
@@ -89,37 +115,56 @@ router.put('/products/:id', upload.array('images', 5), async (req, res) => {
                 });
             });
             newImageUrls = await Promise.all(uploadPromises);
+            console.log('Novas imagens carregadas:', newImageUrls);
         }
 
-        // Verificar se o usuário deseja manter a imagem principal existente
-        const keepExistingMainImage = req.body.keepExistingMainImage === 'true';
-
-        // Atualizar imagens
-        let updatedImages = [];
-        if (keepExistingMainImage) {
-            // Manter a primeira imagem existente e adicionar novas imagens
-            updatedImages = [existingProduct.images[0], ...newImageUrls];
-            // Adicionar as novas imagens, excluindo a primeira imagem existente para evitar duplicação
-            updatedImages = [...updatedImages, ...newImageUrls];
-        } else {
-            // Usar apenas novas imagens se não manter a imagem principal
-            updatedImages = newImageUrls;
+        // 4. DELETAR imagens removidas do Cloudinary
+        if (imagesToRemove.length > 0) {
+            console.log('Deletando imagens do Cloudinary...');
+            const deletePromises = imagesToRemove.map(async (imageUrl) => {
+                try {
+                    // Extrair public_id da URL do Cloudinary
+                    const urlParts = imageUrl.split('/');
+                    const publicIdWithExtension = urlParts[urlParts.length - 1];
+                    const publicId = publicIdWithExtension.split('.')[0];
+                    
+                    console.log('Deletando imagem:', publicId);
+                    await cloudinary.uploader.destroy(publicId, { resource_type: 'image' });
+                } catch (err) {
+                    console.error(`Erro ao deletar imagem do Cloudinary:`, err);
+                }
+            });
+            await Promise.all(deletePromises);
         }
 
-        // Atualizar o produto com novas informações
+        // 5. COMBINAR todas as imagens: existentes + novas
+        const updatedImages = [...existingImages, ...newImageUrls];
+        console.log('Array final de imagens:', updatedImages);
+
+        // 6. REMOVER os campos de controle antes de atualizar
+        delete productData.existingImages;
+        delete productData.imagesToRemove;
+
+        // 7. ATUALIZAR o produto
         const updatedProduct = await Product.findByIdAndUpdate(
             req.params.id,
-            { ...productData, images: updatedImages },
+            { 
+                ...productData, 
+                images: updatedImages 
+            },
             { new: true }
         );
 
+        console.log('Produto atualizado com sucesso!');
+        console.log('Total de imagens após atualização:', updatedProduct.images.length);
+        console.log('=== FIM DA ATUALIZAÇÃO ===');
+
         res.status(200).send(updatedProduct);
     } catch (error) {
-        console.error(error); // Log de erro para debug
+        console.error('Erro ao atualizar produto:', error);
         res.status(500).send({ error: 'Failed to update product', details: error.message });
     }
 });
-
 
 // DELETE - Deletar um produto pelo ID
 router.delete('/products/:id', async (req, res) => {
@@ -133,11 +178,14 @@ router.delete('/products/:id', async (req, res) => {
         // Excluir as imagens do produto no Cloudinary
         if (product.images && product.images.length > 0) {
             const deletePromises = product.images.map(async (imageUrl) => {
-                const publicId = imageUrl.split('/').pop().split('.')[0]; // Extraindo o public_id do URL da imagem
                 try {
+                    const urlParts = imageUrl.split('/');
+                    const publicIdWithExtension = urlParts[urlParts.length - 1];
+                    const publicId = publicIdWithExtension.split('.')[0];
+                    
                     await cloudinary.uploader.destroy(publicId, { resource_type: 'image' });
                 } catch (err) {
-                    console.error(`Erro ao deletar a imagem no Cloudinary: ${publicId}`, err);
+                    console.error(`Erro ao deletar imagem no Cloudinary:`, err);
                 }
             });
             await Promise.all(deletePromises);
